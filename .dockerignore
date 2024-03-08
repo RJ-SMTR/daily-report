@@ -1,0 +1,5 @@
+.git
+.github/
+Dockerfile-scheduler
+Dockerfile-worker
+venv/

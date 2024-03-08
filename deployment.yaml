@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+      - name: worker
+        image: gcr.io/$PROJECT_ID/$IMAGE_WORKER:$GITHUB_SHA
+        env:
+          - name: PREFECT_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: PREFECT_API_KEY
+          - name: PREFECT_API_SERVER
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: PREFECT_API_SERVER
+          - name: PREFECT_TENANT_ID
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: PREFECT_TENANT_ID
+          - name: REDIS_CELERY
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: REDIS_CELERY
+          - name: DISCORD_DAILY_REPORT_ENDPOINT
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: DISCORD_DAILY_REPORT_ENDPOINT
+          - name: DISCORD_ROLE_DADOS
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: DISCORD_ROLE_DADOS
+      restartPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+    spec:
+      containers:
+      - name: scheduler
+        image: gcr.io/$PROJECT_ID/$IMAGE_SCHEDULER:$GITHUB_SHA
+        env:
+          - name: PREFECT_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: PREFECT_API_KEY
+          - name: PREFECT_API_SERVER
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: PREFECT_API_SERVER
+          - name: PREFECT_TENANT_ID
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: PREFECT_TENANT_ID
+          - name: REDIS_CELERY
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: REDIS_CELERY
+          - name: DISCORD_DAILY_REPORT_ENDPOINT
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: DISCORD_DAILY_REPORT_ENDPOINT
+          - name: DISCORD_ROLE_DADOS
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: DISCORD_ROLE_DADOS
+      restartPolicy: Always

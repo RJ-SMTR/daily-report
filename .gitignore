@@ -1,0 +1,9 @@
+venv/
+docker-compose.yaml
+teste.py
+**/__pycache__/*
+dump.rdb
+env
+celerybeat-schedule
+teste.ipynb
+log.txt
