@@ -12,40 +12,23 @@ spec:
       labels:
         app: worker
     spec:
+      volumes:
+        - name: config-json-volume
+          configMap:
+            name: config-json
       containers:
       - name: worker
         image: gcr.io/$PROJECT_ID/$IMAGE_WORKER:$GITHUB_SHA
         env:
-          - name: PREFECT_API_KEY
-            valueFrom:
-              secretKeyRef:
-                name: envs
-                key: PREFECT_API_KEY
-          - name: PREFECT_API_SERVER
-            valueFrom:
-              secretKeyRef:
-                name: envs
-                key: PREFECT_API_SERVER
-          - name: PREFECT_TENANT_ID
-            valueFrom:
-              secretKeyRef:
-                name: envs
-                key: PREFECT_TENANT_ID
           - name: REDIS_CELERY
             valueFrom:
               secretKeyRef:
                 name: envs
                 key: REDIS_CELERY
-          - name: DISCORD_DAILY_REPORT_ENDPOINT
-            valueFrom:
-              secretKeyRef:
-                name: envs
-                key: DISCORD_DAILY_REPORT_ENDPOINT
-          - name: DISCORD_ROLE_DADOS
-            valueFrom:
-              secretKeyRef:
-                name: envs
-                key: DISCORD_ROLE_DADOS
+        volumeMounts:
+          - name: config-json-volume
+            mountPath: /app/config.json
+            subPath: config.json
       restartPolicy: Always
 ---
 apiVersion: apps/v1
@@ -62,38 +45,21 @@ spec:
       labels:
         app: scheduler
     spec:
+      volumes:
+        - name: config-json-volume
+          configMap:
+            name: config-json
       containers:
       - name: scheduler
         image: gcr.io/$PROJECT_ID/$IMAGE_SCHEDULER:$GITHUB_SHA
         env:
-          - name: PREFECT_API_KEY
-            valueFrom:
-              secretKeyRef:
-                name: envs
-                key: PREFECT_API_KEY
-          - name: PREFECT_API_SERVER
-            valueFrom:
-              secretKeyRef:
-                name: envs
-                key: PREFECT_API_SERVER
-          - name: PREFECT_TENANT_ID
-            valueFrom:
-              secretKeyRef:
-                name: envs
-                key: PREFECT_TENANT_ID
           - name: REDIS_CELERY
             valueFrom:
               secretKeyRef:
                 name: envs
                 key: REDIS_CELERY
-          - name: DISCORD_DAILY_REPORT_ENDPOINT
-            valueFrom:
-              secretKeyRef:
-                name: envs
-                key: DISCORD_DAILY_REPORT_ENDPOINT
-          - name: DISCORD_ROLE_DADOS
-            valueFrom:
-              secretKeyRef:
-                name: envs
-                key: DISCORD_ROLE_DADOS
+        volumeMounts:
+          - name: config-json-volume
+            mountPath: /app/config.json
+            subPath: config.json
       restartPolicy: Always

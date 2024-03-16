@@ -1,0 +1,10 @@
+[
+    {
+        "api_server": "https://address.com",
+        "api_key": "uuid key",
+        "tenant_id": "uuid key",
+        "project_name": "production",
+        "webhook": "https://discordwebhook.com/address",
+        "discord_role_id": "12345678910"
+    }
+]
