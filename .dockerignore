@@ -2,4 +2,4 @@
 .github/
 Dockerfile-scheduler
 Dockerfile-worker
-venv/
+config-dev.json
