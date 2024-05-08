@@ -380,7 +380,7 @@ def generate_daily_report(now: datetime, config: dict):
 
     if config['project_name'] == 'main':
         flows, flow_runs = get_data_old_project(**query_args)
-    elif config['project_name'] == 'production':
+    elif config['project_name'] in ['production', 'staging']:
         flows, flow_runs = get_data(**query_args)
     else:
         return pd.DataFrame()
