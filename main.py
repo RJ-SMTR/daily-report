@@ -14,8 +14,16 @@ from celery.schedules import crontab
 from celery.utils.log import get_task_logger
 from datetime import datetime, timedelta
 from dateutil import parser
+from math import ceil
 from prefect.client import Client
 
+
+PAGE_SIZE = os.getenv('PAGE_SIZE')
+
+if not PAGE_SIZE:
+    PAGE_SIZE = 15
+else:
+    PAGE_SIZE = int(PAGE_SIZE)
 
 app = Celery('main', broker=os.getenv('REDIS_CELERY'))
 app.conf.timezone = 'UTC'
@@ -261,15 +269,15 @@ def get_active_schedules(flows: pd.DataFrame) -> pd.DataFrame:
 def get_md_bold_text(text):
     return f'**{text}**'
 
-def send_message(flows_agg: pd.DataFrame, webhook: str, role_id: str, now: datetime):
+def send_message(flows_agg: pd.DataFrame, webhook: str, role_id: str, now: datetime, current_page: int, total_pages: int) -> None:
     content = f'Bom dia, <@&{role_id}>! :coffee:'
-    author = {
-        'name': 'Reporte Diário de Pipelines',
-        'url': 'http://prefect.dados.rio'
-    }
     headers = {"Content-Type": "application/json"}
     timestamp = now.isoformat()
     if flows_agg.empty:
+        author = {
+            'name': 'Report de Pipelines (Parte 1 de 1)',
+            'url': 'https://pipelines.dados.rio/'
+        }
         message = {
             "content": content,
             "embeds": [{
@@ -290,6 +298,11 @@ def send_message(flows_agg: pd.DataFrame, webhook: str, role_id: str, now: datet
         p_logger.info(str(r.status_code) + r.text)
         return
     
+    author = {
+        'name': f'Report de Pipelines (Parte {current_page} de {total_pages})',
+        'url': 'https://pipelines.dados.rio/'
+    }
+
     red_circle = ':red_circle:'
     yellow_circle = ':yellow_circle:'
     green_circle = ':green_circle:'
@@ -455,7 +468,18 @@ def daily_report(now: datetime = None):
         for config in configs:
             try:
                 report = generate_daily_report(now, config)
-                send_message(report, config['webhook'], config['discord_role_id'], now)
+                total_pages = ceil(len(report) / PAGE_SIZE)
+
+                for i in range(total_pages):
+
+                    send_message(
+                        report[i * PAGE_SIZE : (i + 1) * PAGE_SIZE],
+                        config["webhook"],
+                        config["discord_role_id"],
+                        now,
+                        current_page=i + 1,
+                        total_pages=total_pages,
+                    )
             except Exception:
                 c_logger.error(traceback.format_exc())
                 p_logger.error(traceback.format_exc())

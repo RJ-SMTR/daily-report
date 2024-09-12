@@ -25,6 +25,11 @@ spec:
               secretKeyRef:
                 name: envs
                 key: REDIS_CELERY
+          - name: PAGE_SIZE
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: PAGE_SIZE
         volumeMounts:
           - name: config-json-volume
             mountPath: /app/config.json
@@ -58,6 +63,11 @@ spec:
               secretKeyRef:
                 name: envs
                 key: REDIS_CELERY
+            - name: PAGE_SIZE
+              valueFrom:
+                secretKeyRef:
+                  name: envs
+                  key: PAGE_SIZE
         volumeMounts:
           - name: config-json-volume
             mountPath: /app/config.json
