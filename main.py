@@ -468,7 +468,10 @@ def daily_report(now: datetime = None):
         for config in configs:
             try:
                 report = generate_daily_report(now, config)
-                total_pages = ceil(len(report) / PAGE_SIZE)
+
+                # or 1 força que o total de páginas seja pelo menos 1 caso o relatorio seja vazio
+                # assim a gente consegue mandar a mensagem de que nenhum problema ocorreu
+                total_pages = ceil(len(report) / PAGE_SIZE) or 1
 
                 for i in range(total_pages):
 
