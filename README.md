@@ -24,3 +24,4 @@ $ python main.py "2024-10-10 11:00:00"
 - [ ] Poder selecionar qual relatório quer gerar
 - [ ] Poder enviar o relatório para um webhook do Discord arbitrário
 - [ ] Especificar intervalo de busca
+- [ ] Encontrar uma forma de reconectar o Celery ao Redis caso a conexão fique indisponível
