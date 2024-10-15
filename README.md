@@ -14,7 +14,7 @@ Você pode gerar relatórios passando uma timestamp ISO como argumento.\
 O daily-report está rodando em um cluster *us-central1-c*.\
 Para evitar maiores confusões, o relógio está setado para UTC.\
 Então lembre-se de passar as strings de horário com 3h a mais do que o horário de Brasília desejado.\
-O comando de exemplo gera o relatório sobre tudo o que ocorreu entre 09/10/2024 08:00:00 e 10/10/2024 08:00:00.\
+O comando de exemplo gera o relatório sobre tudo o que ocorreu entre 09/10/2024 08:00:00 e 10/10/2024 08:00:00.
 ```console
 $ python main.py "2024-10-10 11:00:00"
 ```
