@@ -30,6 +30,21 @@ spec:
               secretKeyRef:
                 name: envs
                 key: PAGE_SIZE
+          - name: EMAIL
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: EMAIL
+          - name: PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: PASSWORD
+          - name: CREDENTIALS
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: CREDENTIALS
         volumeMounts:
           - name: config-json-volume
             mountPath: /app/config.json
@@ -68,6 +83,21 @@ spec:
               secretKeyRef:
                 name: envs
                 key: PAGE_SIZE
+          - name: EMAIL
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: EMAIL
+          - name: PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: PASSWORD
+          - name: CREDENTIALS
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: CREDENTIALS
         volumeMounts:
           - name: config-json-volume
             mountPath: /app/config.json

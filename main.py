@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from dateutil import parser
 from math import ceil
 from prefect.client import Client
+from catalog import sync
 
 PAGE_SIZE = os.getenv("PAGE_SIZE")
 
@@ -38,6 +39,9 @@ c_logger = get_task_logger(__name__)
 def setup_periodic_tasks(sender, **kwargs):
     sender.add_periodic_task(
         crontab(hour=11, minute=0), daily_report.s(), name="Daily Report"
+    )
+    sender.add_periodic_task(
+        crontab(hour=11, minute=0), sync_catalog.s(), name="Catalog Sync"
     )
 
 
@@ -498,10 +502,23 @@ def daily_report(now: datetime = None):
                 p_logger.error(traceback.format_exc())
 
 
-if __name__ == "__main__":
+@app.task
+def sync_catalog():
+    sync()
 
-    if len(sys.argv) > 1:
-        now = parser.parse(sys.argv[1]).astimezone(pytz.timezone("America/Sao_Paulo"))
+
+if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "report":
+        now = parser.parse(sys.argv[2]).astimezone(pytz.timezone("America/Sao_Paulo"))
         daily_report(now)
-    else:
+    elif len(sys.argv) == 2 and sys.argv[1] == "report":
         daily_report()
+    elif len(sys.argv) == 2 and sys.argv[1] == "catalog":
+        sync()
+    else:
+        print("No valid options, the valid commands are as follows:")
+        print(
+            'python main.py report "2025-12-25 11:00:00" // Generate report for the informed datetime'
+        )
+        print("python main.py report // Generate report for the current datetime")
+        print("python main.py catalog // Sync catalog to BigQuery")
