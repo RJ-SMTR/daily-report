@@ -3,788 +3,646 @@ import os
 import requests
 from google.cloud import bigquery
 from google.oauth2 import service_account
+from pydantic import BaseModel, field_validator, Field
+from typing import Optional, ClassVar
 
 
-def auth(url: str, email: str | None, password: str | None) -> str:
-    mutation = f"""
-            mutation TokenAuth($email: String!, $password: String!) {{
-                    tokenAuth(email: $email, password: $password) {{
-                    token
-                    payload
-                    refreshExpiresIn
-                }}
-            }}
-            """
-    variables = json.dumps({"email": email, "password": password})
-    payload = {"query": mutation, "variables": variables}
+class Dataset(BaseModel):
+    id: Optional[str] = Field(default=None, alias="_id")
+    name: str
+    description: str
 
-    r = requests.post(url, data=payload)
+    def __eq__(self, other):
+        if not isinstance(other, Dataset):
+            return NotImplemented
 
-    return r.json()["data"]["tokenAuth"]["token"]
+        return self.name == other.name and self.description == other.description
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _sanitize_name(cls, v: str) -> str:
+        return (v or "").strip()
 
-def get_datasets_catalog(url: str, token: str) -> dict:
+    @field_validator("description", mode="before")
+    @classmethod
+    def _sanitize_description(cls, v: str | None) -> str:
+        return (v or "").strip()
 
-    query = """
-        query {
-          allDataset {
-            edges {
-              node {
-                _id,
-                name,
-                description
-              }
-            }
-          }
-        }
-        """
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": query}
-    )
-    elems = list(map(lambda x: x["node"], r.json()["data"][f"allDataset"]["edges"]))
-    new_dict = {}
-    for elem in elems:
-        new_dict[elem["name"]] = {"id": elem["_id"], "description": elem["description"]}
+    @classmethod
+    def from_raw(cls, raw):
+        if isinstance(raw, dict):
+            return cls.model_validate(raw)
 
-    return new_dict
+        if isinstance(raw, bigquery.Dataset):
+            return cls(name=raw.dataset_id, description=raw.description or "")
+
+    def sync(self, new):
+        self.id = new.id
 
 
-def get_datasets_bq(client: bigquery.Client) -> dict:
-    project_id = "rj-smtr"
-    datasets = client.list_datasets(project=project_id)
-    exclude_staging = True
-    exclude_test = True
-    exclude_logs = True
-    new_dict = {}
-    for dataset in datasets:
-        dataset_id: str = dataset.dataset_id
-        if dataset_id != "bilhetagem":
-            continue
-        if exclude_staging and dataset_id.endswith("_staging"):
-            continue
-        if exclude_test and "test" in dataset_id:
-            continue
-        if exclude_logs and (
-            dataset_id.startswith("logs_") or dataset_id.endswith("_logs")
-        ):
-            continue
-        dataset_obj = client.get_dataset(f"{project_id}.{dataset_id}")
-        new_dict[dataset_id] = {"description": dataset_obj.description}
+class Table(BaseModel):
+    id: str | None = Field(default=None, alias="_id")
+    name: str
+    description: str
+    dataset: Dataset
 
-    return new_dict
+    def __eq__(self, other):
+        if not isinstance(other, Table):
+            return NotImplemented
 
-
-def delete_dataset(url: str, dataset_id: str, token: str) -> dict:
-    mutation = """
-        mutation {
-          DeleteDataset(
-            id: "%s"
-          ) {
-            ok,
-            errors
-          } 
-        }
-"""
-
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {token}"},
-        data={"query": mutation % dataset_id},
-    )
-    print(r.text)
-    return r.json()
-
-
-def insert_dataset(
-    url: str, dataset_name: str, dataset_description: str, token: str
-) -> dict:
-    mutation = '''
-        mutation {
-          CreateUpdateDataset(
-            input: {
-              slug: "%s",
-              name: "%s",
-              organization: "e4bc48de-9dea-4fbb-9671-1bc24d37a8d4",
-              themes: [],
-              description: """%s"""
-            }
-          ) {
-            clientMutationId
-          } 
-        }''' % (
-        dataset_name,
-        dataset_name,
-        dataset_description.strip() if dataset_description else "",
-    )
-
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": mutation}
-    )
-    print(r.text)
-    return r.json()
-
-
-def update_dataset(
-    url: str, dataset_catalog_id: str, dataset_description: str, token: str
-) -> dict:
-    mutation = '''
-        mutation {
-          CreateUpdateDataset(
-            input: {
-              id: "%s",
-              description: """%s"""
-            }
-          ) {
-            clientMutationId
-          } 
-        }''' % (
-        dataset_catalog_id,
-        dataset_description.strip() if dataset_description else "",
-    )
-
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": mutation}
-    )
-    print(r.text)
-    return r.json()
-
-
-def sync_datasets(
-    client: bigquery.Client,
-    url: str,
-    datasets_catalog: dict,
-    datasets_bq: dict,
-    token: str,
-) -> None:
-    catalog_set = set(datasets_catalog.keys())
-    bq_set = set(datasets_bq.keys())
-
-    obsolete = catalog_set - bq_set
-    new = bq_set - catalog_set
-    intersection = catalog_set.intersection(bq_set)
-
-    for dataset_id in obsolete:
-        print(dataset_id)
-        delete_dataset(url, datasets_catalog[dataset_id]["id"], token)
-
-    for dataset_id in new:
-        insert_dataset(url, dataset_id, datasets_bq[dataset_id]["description"], token)
-
-    for dataset_id in intersection:
-        if (
-            datasets_bq[dataset_id]["description"]
-            and datasets_bq[dataset_id]["description"].strip()
-            != datasets_catalog[dataset_id]["description"]
-        ):
-            update_dataset(
-                url,
-                datasets_catalog[dataset_id]["id"],
-                datasets_bq[dataset_id]["description"],
-                token,
-            )
-        elif (
-            not datasets_bq[dataset_id]["description"]
-            and datasets_bq[dataset_id]["description"]
-            != datasets_catalog[dataset_id]["description"]
-        ):
-            update_dataset(
-                url,
-                datasets_catalog[dataset_id]["id"],
-                datasets_bq[dataset_id]["description"],
-                token,
-            )
-
-    print("Dataset sync complete")
-
-
-def get_tables_catalog(url: str, dataset_catalog_id: str, token: str) -> dict:
-
-    query = """
-    {
-      allDataset(id: "%s") {
-        edges {
-          node {
-            _id,
-            tables {
-              edges {
-                node {
-                  _id,
-                  name,
-                  description
-                }
-              }
-            }
-          }
-        }
-      }
-    }""" % (
-        dataset_catalog_id
-    )
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": query}
-    )
-    elems = list(
-        map(
-            lambda x: x["node"],
-            r.json()["data"][f"allDataset"]["edges"][0]["node"]["tables"]["edges"],
+        return (
+            self.name == other.name
+            and self.description == other.description
+            and self.dataset.id == other.dataset.id
         )
-    )
-    new_dict = {}
-    for elem in elems:
-        new_dict[elem["name"]] = {"id": elem["_id"], "description": elem["description"]}
 
-    return new_dict
+    @field_validator("name", mode="before")
+    @classmethod
+    def _sanitize_name(cls, v: str) -> str:
+        return (v or "").strip()
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _sanitize_description(cls, v: str) -> str:
+        return (v or "").strip()
+
+    @classmethod
+    def from_raw(cls, raw, dataset: Dataset):
+        if isinstance(raw, dict):
+            return cls(**raw, dataset=dataset)
+
+        if isinstance(raw, bigquery.Table):
+            return cls(
+                name=raw.table_id, description=raw.description or "", dataset=dataset
+            )
+
+    def sync(self, new):
+        self.id = new.id
 
 
-def get_tables_bq(client: bigquery.Client, dataset_id: str) -> dict:
-    project_id = "rj-smtr"
-    tables = client.list_tables(f"{project_id}.{dataset_id}")
-    new_dict = {}
-    for table in tables:
-        table_id = table.table_id
-        table_obj = client.get_table(table.full_table_id.replace(":", "."))
+class Type(BaseModel):
+    id: str | None = Field(default=None, alias="_id")
+    name: str
+
+
+class TypeMap:
+
+    _instance = None
+
+    def __init__(self):
+        self._map = {}
+        self.catalog_api = CatalogAPI()
+        self._populate()
+
+    def __new__(cls):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __getitem__(self, key):
+        if not key in self._map:
+            self.catalog_api.insert_type(key)
+            self._populate()
+        return self._map[key]
+
+    def _populate(self):
+        self._map = {}
+        types = self.catalog_api.get_types()
+        for bq_type in types:
+            self._map[bq_type.name] = bq_type
+
+
+class Column(BaseModel):
+    id: str | None = Field(default=None, alias="_id")
+    name: str
+    description: str
+    is_partition: bool
+    type: Type
+    table: Table
+    _type_map: ClassVar[TypeMap | None] = None
+
+    def __eq__(self, other):
+        if not isinstance(other, Column):
+            return NotImplemented
+
+        return (
+            self.name == other.name
+            and self.description == other.description
+            and self.is_partition == other.is_partition
+            and self.type.id == other.type.id
+            and self.table.id == other.table.id
+        )
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _sanitize_name(cls, v: str) -> str:
+        return (v or "").strip()
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _sanitize_description(cls, v: str) -> str:
+        return (v or "").strip()
+
+    # Isso existe meramente pra satisfazer a ordem das declaracoes
+    @classmethod
+    def _set_type_map(cls) -> TypeMap:
+        if cls._type_map is None:
+            cls._type_map = TypeMap()
+        return cls._type_map
+
+    @classmethod
+    def from_raw(cls, raw, table: Table, is_partition=False):
+        cls._set_type_map()
+        assert cls._type_map is not None
+        if isinstance(raw, dict):
+            bq_type = cls._type_map[raw["bigqueryType"]["name"]]
+            return cls(
+                type=bq_type, is_partition=raw["isPartition"], table=table, **raw
+            )
+
+        if isinstance(raw, bigquery.SchemaField):
+            bq_type = cls._type_map[raw.field_type]
+            return cls(
+                name=raw.name,
+                description=raw.description or "",
+                type=bq_type,
+                table=table,
+                is_partition=is_partition,
+            )
+
+    def sync(self, new):
+        self.id = new.id
+
+
+class CloudTable(BaseModel):
+    id: str | None = Field(default=None, alias="_id")
+    project_id: str = Field(default="rj-smtr", alias="gcpProjectId")
+    dataset_id: str = Field(alias="gcpDatasetId")
+    table_id: str = Field(alias="gcpTableId")
+    table: Table
+
+    def __eq__(self, other):
+        if not isinstance(other, CloudTable):
+            return NotImplemented
+
+        return (
+            self.project_id == other.project_id
+            and self.dataset_id == other.dataset_id
+            and self.table_id == other.table_id
+        )
+
+    @classmethod
+    def from_raw(cls, raw=None, table=None):
+        if isinstance(raw, dict) and table is not None:
+            return cls(**raw, table=table)
+
+        if raw is None and table is not None:
+            return cls(
+                gcpDatasetId=table.dataset.name, gcpTableId=table.name, table=table
+            )
+
+    def sync(self, new):
+        self.id = new.id
+
+
+class BigQueryAPI:
+    _instance = None
+
+    def __init__(self):
+        self.client = self._get_bq_client()
+
+    def __new__(cls):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def _get_bq_client(self) -> bigquery.Client:
+        json_acct_info = json.loads(os.getenv("CREDENTIALS") or "", strict=False)
+        credentials = service_account.Credentials.from_service_account_info(
+            json_acct_info
+        )
+        client = bigquery.Client(credentials=credentials)
+        return client
+
+    def get_datasets(self) -> list[Dataset]:
+        project_id = "rj-smtr"
+        datasets = self.client.list_datasets(project=project_id)
+        exclude_staging = True
+        exclude_test = True
+        exclude_logs = True
+        dataset_list = []
+        for dataset in datasets:
+            dataset_id: str = dataset.dataset_id
+            if dataset_id not in ["bilhetagem", "gtfs"]:
+                continue
+            if exclude_staging and dataset_id.endswith("_staging"):
+                continue
+            if exclude_test and "test" in dataset_id:
+                continue
+            if exclude_logs and (
+                dataset_id.startswith("logs_") or dataset_id.endswith("_logs")
+            ):
+                continue
+            dataset_obj = self.client.get_dataset(f"{project_id}.{dataset_id}")
+            dataset_list.append(Dataset.from_raw(dataset_obj))
+
+        return dataset_list
+
+    def get_tables(self, dataset: Dataset) -> list[Table]:
+        project_id = "rj-smtr"
+        tables = self.client.list_tables(f"{project_id}.{dataset.name}")
+        table_list = []
+        for table in tables:
+            table_obj = self.client.get_table(table.full_table_id.replace(":", "."))
+            table_list.append(Table.from_raw(table_obj, dataset=dataset))
+        return table_list
+
+    def get_columns(self, table: Table) -> list[Column]:
+        project_id = "rj-smtr"
+        table_obj = self.client.get_table(
+            f"{project_id}.{table.dataset.name}.{table.name}"
+        )
         partition_column = (
             table_obj.time_partitioning.field if table_obj.time_partitioning else None
         )
-        new_dict[table_id] = {
-            "description": table_obj.description,
-            "partition": partition_column,
-        }
-
-    return new_dict
-
-
-def delete_table(url: str, table_id: str, token: str) -> dict:
-    mutation = (
-        """
-        mutation {
-          DeleteTable(
-            id: "%s"
-          ) {
-            ok,
-            errors
-          } 
-        }"""
-        % table_id
-    )
-
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": mutation}
-    )
-    print(r.text)
-    return r.json()
-
-
-def insert_table(
-    url: str,
-    table_name: str,
-    table_description: str,
-    dataset_catalog_id: str,
-    token: str,
-) -> dict:
-    mutation = '''
-            mutation {
-      CreateUpdateTable(
-        input: {
-          slug: "%s",
-          name: "%s",
-          description: """%s""",
-          dataset: "%s",          
-        }
-      ) {
-        clientMutationId
-      } 
-    }''' % (
-        table_name,
-        table_name,
-        table_description.strip() if table_description else "",
-        dataset_catalog_id,
-    )
-
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": mutation}
-    )
-    print(r.text)
-    return r.json()
-
-
-def update_table(
-    url: str, table_catalog_id: str, table_description: str, token: str
-) -> dict:
-    mutation = '''
-        mutation {
-      CreateUpdateTable(
-        input: {
-          id: "%s",
-          description: """%s""",      
-        }
-      ) {
-        clientMutationId
-      } 
-    }''' % (
-        table_catalog_id,
-        table_description.strip() if table_description else "",
-    )
-
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": mutation}
-    )
-    print(r.text)
-    return r.json()
-
-
-def sync_tables(
-    client: bigquery.Client, url: str, datasets_catalog: dict, token: str
-) -> None:
-
-    for dataset_id in datasets_catalog:
-        tables_catalog = get_tables_catalog(
-            url, datasets_catalog[dataset_id]["id"], token
-        )
-        tables_bq = get_tables_bq(client, dataset_id)
-
-        catalog_set = set(tables_catalog.keys())
-        bq_set = set(tables_bq.keys())
-
-        obsolete = catalog_set - bq_set
-        new = bq_set - catalog_set
-        intersection = catalog_set.intersection(bq_set)
-
-        print(obsolete, new, intersection)
-
-        for table_id in obsolete:
-            delete_table(url, tables_catalog[table_id]["id"], token)
-
-        for table_id in new:
-            insert_table(
-                url,
-                table_id,
-                tables_bq[table_id]["description"],
-                datasets_catalog[dataset_id]["id"],
-                token,
+        columns = []
+        for column in table_obj.schema:
+            columns.append(
+                Column.from_raw(
+                    column, is_partition=column.name == partition_column, table=table
+                )
             )
-
-        for table_id in intersection:
-            if (
-                tables_bq[table_id]["description"]
-                and tables_bq[table_id]["description"].strip()
-                != tables_catalog[table_id]["description"]
-            ):
-                update_table(
-                    url,
-                    tables_catalog[table_id]["id"],
-                    tables_bq[table_id]["description"],
-                    token,
-                )
-            elif (
-                not tables_bq[table_id]["description"]
-                and tables_bq[table_id]["description"]
-                != tables_catalog[table_id]["description"]
-            ):
-                update_dataset(
-                    url,
-                    tables_catalog[table_id]["id"],
-                    tables_bq[table_id]["description"],
-                    token,
-                )
-
-    print("Table sync complete")
+        return columns
 
 
-def get_columns_catalog(url: str, table_catalog_id: str, token: str) -> dict:
-    print(table_catalog_id)
-    query = """
-    {
-      allTable(id: "%s") {
-        edges {
-          node {
-            _id,
-            name,
-            columns {
-              edges {
-                node {
-                  _id,
-                  name,
-                  description,
-                  bigqueryType {
-                    _id,
-                    name
-                  },
-                  isPartition
+class CatalogAPI:
+    _instance = None
+
+    def __init__(self):
+        self.url = os.getenv("URL") or ""
+        self.email = os.getenv("EMAIL")
+        self.password = os.getenv("PASSWORD")
+        self.auth()
+
+    def __new__(cls):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def auth(self) -> None:
+        mutation = f"""
+                mutation TokenAuth($email: String!, $password: String!) {{
+                        tokenAuth(email: $email, password: $password) {{
+                        token
+                        payload
+                        refreshExpiresIn
+                    }}
+                }}
+                """
+        variables = json.dumps({"email": self.email, "password": self.password})
+        payload = {"query": mutation, "variables": variables}
+
+        r = requests.post(self.url, data=payload)
+        r.raise_for_status()
+        self.token = r.json()["data"]["tokenAuth"]["token"]
+
+    def _post(self, data) -> dict:
+        headers = {"Authorization": f"Bearer {self.token}"}
+        r = requests.post(self.url, headers=headers, data=data)
+        r.raise_for_status()
+        response = r.json()
+        if "errors" in data and any(
+            "Signature has expired" in err["message"] for err in data["errors"]
+        ):
+            self.auth()
+            headers = {"Authorization": f"Bearer {self.token}"}
+            r = requests.post(self.url, headers=headers, data=data)
+            response = r.json()
+        return response
+
+    def _delete(self, struct, id) -> dict:
+        mutation = """
+            mutation {
+              Delete%s(
+                id: "%s"
+              ) {
+                ok,
+                errors
+              } 
+            }""" % (
+            struct,
+            id,
+        )
+
+        return self._post({"query": mutation})
+
+    def _insert_update(self, struct: str, fields: dict) -> dict:
+        args = []
+        for field in fields:
+            if isinstance(fields[field], bool):
+                arg = f"{field}: {str(fields[field]).lower()}"
+            elif isinstance(fields[field], list):
+                arg = f"{field}: []"
+            else:
+                arg = f'{field}: """{fields[field]}"""'
+            args.append(arg)
+        fields_string = ",".join(args)
+        mutation = """
+            mutation {
+              CreateUpdate%s(
+                input: {
+                    %s
+                }
+              ) {
+                clientMutationId
+              } 
+            }""" % (
+            struct,
+            fields_string,
+        )
+        return self._post({"query": mutation})
+
+    def _get(self, struct, fields, filter=None):
+        fields_string = ",".join(fields)
+        filter_string = (
+            '(%s: "%s")' % (filter["field"], filter["value"]) if filter else ""
+        )
+        query = """
+            {
+              all%s %s {
+                edges {
+                  node {
+                    %s
+                  }
                 }
               }
             }
-          }
-        }
-      }
-    }""" % (
-        table_catalog_id
-    )
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": query}
-    )
-    elems = list(
-        map(
-            lambda x: x["node"],
-            r.json()["data"][f"allTable"]["edges"][0]["node"]["columns"]["edges"],
+        """ % (
+            struct,
+            filter_string,
+            fields_string,
         )
-    )
-    new_dict = {}
-    for elem in elems:
-        new_dict[elem["name"]] = {
-            "id": elem["_id"],
-            "description": elem["description"],
-            "type": elem["bigqueryType"]["name"],
-            "is_partition": elem["isPartition"],
+        data = self._post({"query": query})
+        elems = data["data"][f"all{struct}"]["edges"]
+        return elems
+
+    def delete_dataset(self, dataset: Dataset) -> dict:
+        return self._delete("Dataset", dataset.id)
+
+    def delete_table(self, table: Table) -> dict:
+        return self._delete("Table", table.id)
+
+    def delete_column(self, column: Column) -> dict:
+        return self._delete("Column", column.id)
+
+    def delete_cloud_table(self, cloud_table: CloudTable) -> dict:
+        return self._delete("CloudTable", cloud_table.id)
+
+    def insert_dataset(self, dataset: Dataset) -> dict:
+        fields = {
+            "slug": dataset.name,
+            "name": dataset.name,
+            "organization": "e4bc48de-9dea-4fbb-9671-1bc24d37a8d4",
+            "themes": [],
+            "description": dataset.description,
         }
+        return self._insert_update("Dataset", fields)
 
-    return new_dict
+    def insert_table(self, table: Table) -> dict:
+        fields = {
+            "slug": table.name,
+            "name": table.name,
+            "description": table.description,
+            "dataset": table.dataset.id,
+        }
+        return self._insert_update("Table", fields)
 
-
-def get_columns_bq(client: bigquery.Client, dataset_id: str, table_id: str) -> dict:
-    project_id = "rj-smtr"
-    table = client.get_table(f"{project_id}.{dataset_id}.{table_id}")
-    partition_column = (
-        table.time_partitioning.field if table.time_partitioning else None
-    )
-    new_dict = {}
-    for column in table.schema:
-        new_dict[column.name] = {
-            "type": column.field_type,
+    def insert_column(self, column: Column) -> dict:
+        fields = {
+            "name": column.name,
+            "bigqueryType": column.type.id,
             "description": column.description,
-            "is_partition": column.name == partition_column,
+            "table": column.table.id,
+            "isPartition": column.is_partition,
         }
-    return new_dict
+        return self._insert_update("Column", fields)
 
-
-def delete_column(url: str, column_id: str, token: str) -> dict:
-    mutation = (
-        """
-        mutation {
-          DeleteColumn(
-            id: "%s"
-          ) {
-            ok,
-            errors
-          } 
-        }"""
-        % column_id
-    )
-
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": mutation}
-    )
-    print(r.text)
-    return r.json()
-
-
-def insert_column(
-    url: str,
-    column_name: str,
-    column_type: str,
-    column_description: str,
-    table_catalog_id: str,
-    is_partition: bool,
-    token: str,
-) -> dict:
-    types = {
-        "BOOLEAN": "732966bc-8b72-4134-9fb4-590eb6d72097",
-        "BYTES": "a4dffb33-947f-4c47-8be9-c1206659bd26",
-        "DATE": "c40775dc-4c18-4214-bade-e0356ee5dba5",
-        "DATETIME": "71949ced-2d10-4ffe-ae50-17c77e210f67",
-        "FLOAT": "2b584843-e5d4-4a3b-99e4-9135e022ea52",
-        "GEOGRAPHY": "65055640-b78b-4a45-b503-890164ec9b3a",
-        "INTEGER": "e1ce20fa-9cfc-4492-8203-8fae1c4e950c",
-        "JSON": "c07065a5-24ce-4e1b-9f33-8da4a370894b",
-        "NUMERIC": "b8ea0945-adef-4956-a36e-08687b3af76d",
-        "RECORD": "de365b95-28cd-473b-9d0a-7f580fbd05e0",
-        "STRING": "1ace76cc-06a9-4b82-8e46-fc82e086d5e1",
-        "TIME": "efc690b4-d95d-49b5-b26d-e09bb0b857f8",
-        "TIMESTAMP": "43e0df69-3497-4c05-8725-a545b8c93623",
-    }
-
-    mutation = """
-                mutation {
-      CreateUpdateColumn(
-        input: {
-          name: "%s",
-          bigqueryType: "%s",
-          description: "%s",
-          table: "%s",
-          isPartition: %s
+    def insert_cloud_table(self, cloud_table: CloudTable) -> dict:
+        fields = {
+            "table": cloud_table.table.id,
+            "gcpTableId": cloud_table.table_id,
+            "gcpDatasetId": cloud_table.dataset_id,
+            "gcpProjectId": cloud_table.project_id,
         }
-      ) {
-        clientMutationId
-      } 
-    }""" % (
-        column_name,
-        types[column_type],
-        column_description.strip() if column_description else "",
-        table_catalog_id,
-        "true" if is_partition else "false",
-    )
+        return self._insert_update("CloudTable", fields)
 
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": mutation}
-    )
-    print(r.text)
-    return r.json()
+    def insert_type(self, bq_type: Type):
+        fields = {"name": bq_type.name}
 
+        return self._insert_update("BigQueryType", fields)
 
-def update_column(
-    url: str,
-    column_catalog_id: str,
-    column_type: str,
-    column_description: str,
-    is_partition: bool,
-    token: str,
-) -> dict:
-    types = {
-        "BOOLEAN": "732966bc-8b72-4134-9fb4-590eb6d72097",
-        "BYTES": "a4dffb33-947f-4c47-8be9-c1206659bd26",
-        "DATE": "c40775dc-4c18-4214-bade-e0356ee5dba5",
-        "DATETIME": "71949ced-2d10-4ffe-ae50-17c77e210f67",
-        "FLOAT": "2b584843-e5d4-4a3b-99e4-9135e022ea52",
-        "GEOGRAPHY": "65055640-b78b-4a45-b503-890164ec9b3a",
-        "INTEGER": "e1ce20fa-9cfc-4492-8203-8fae1c4e950c",
-        "JSON": "c07065a5-24ce-4e1b-9f33-8da4a370894b",
-        "NUMERIC": "b8ea0945-adef-4956-a36e-08687b3af76d",
-        "RECORD": "de365b95-28cd-473b-9d0a-7f580fbd05e0",
-        "STRING": "1ace76cc-06a9-4b82-8e46-fc82e086d5e1",
-        "TIME": "efc690b4-d95d-49b5-b26d-e09bb0b857f8",
-        "TIMESTAMP": "43e0df69-3497-4c05-8725-a545b8c93623",
-    }
-    mutation = """
-                mutation {
-      CreateUpdateColumn(
-        input: {
-          id: "%s",
-          bigqueryType: "%s",
-          description: "%s",
-          isPartition: %s
+    def update_dataset(self, dataset: Dataset) -> dict:
+        fields = {
+            "id": dataset.id,
+            "description": dataset.description,
         }
-      ) {
-        clientMutationId
-      } 
-    }""" % (
-        column_catalog_id,
-        types[column_type],
-        column_description.strip() if column_description else "",
-        "true" if is_partition else "false",
-    )
+        return self._insert_update("Dataset", fields)
 
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": mutation}
-    )
-    print(r.text)
-    return r.json()
-
-
-def sync_columns(
-    client: bigquery.Client, url: str, datasets_catalog: dict, token: str
-) -> None:
-
-    for dataset_id in datasets_catalog:
-        tables_catalog = get_tables_catalog(
-            url, datasets_catalog[dataset_id]["id"], token
-        )
-
-        for table_id in tables_catalog:
-            columns_catalog = get_columns_catalog(
-                url, tables_catalog[table_id]["id"], token
-            )
-            columns_bq = get_columns_bq(client, dataset_id, table_id)
-
-            catalog_set = set(columns_catalog.keys())
-            bq_set = set(columns_bq.keys())
-
-            obsolete = catalog_set - bq_set
-            new = bq_set - catalog_set
-            intersection = catalog_set.intersection(bq_set)
-
-            print(obsolete, new, intersection)
-
-            for column_id in obsolete:
-                delete_column(url, columns_catalog[column_id]["id"], token)
-
-            for column_id in new:
-                insert_column(
-                    url,
-                    column_id,
-                    columns_bq[column_id]["type"],
-                    columns_bq[column_id]["description"],
-                    tables_catalog[table_id]["id"],
-                    columns_bq[column_id]["is_partition"],
-                    token,
-                )
-
-            for column_id in intersection:
-                cond1 = (
-                    columns_bq[column_id]["description"]
-                    and columns_bq[column_id]["description"].strip()
-                    != columns_catalog[column_id]["description"]
-                )
-                cond2 = (
-                    not columns_bq[column_id]["description"]
-                    and columns_bq[column_id]["description"]
-                    != columns_catalog[column_id]["description"]
-                )
-                cond3 = (
-                    columns_bq[column_id]["is_partition"]
-                    != columns_catalog[column_id]["is_partition"]
-                )
-                if cond1 or cond2 or cond3:
-                    update_column(
-                        url,
-                        columns_catalog[column_id]["id"],
-                        columns_bq[column_id]["type"],
-                        columns_bq[column_id]["description"],
-                        columns_bq[column_id]["is_partition"],
-                        token,
-                    )
-
-    print("Dataset sync complete")
-
-
-def get_cloud_tables_catalog(url: str, table_id: str, token: str) -> dict:
-
-    query = """
-        {
-          allCloudtable (table_Id: "%s") {
-            edges {
-              node {
-                _id,
-                gcpTableId,
-                gcpDatasetId
-              }
-            }
-          }
-        }""" % (
-        table_id
-    )
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": query}
-    )
-    elems = list(map(lambda x: x["node"], r.json()["data"][f"allCloudtable"]["edges"]))
-    print(elems)
-    if elems:
-        return elems[0]
-    else:
-        return {}
-
-
-def insert_cloud_table(
-    url: str, table_catalog_id: str, table_name: str, dataset_name: str, token: str
-) -> dict:
-    mutation = """
-    mutation {
-      CreateUpdateCloudTable(
-        input: {
-          table: "%s",
-          gcpTableId: "%s",
-          gcpDatasetId: "%s",
-          gcpProjectId: "rj-smtr",
+    def update_table(self, table: Table) -> dict:
+        fields = {
+            "id": table.id,
+            "description": table.description,
         }
-      ) {
-        clientMutationId
-      }
-    }""" % (
-        table_catalog_id,
-        table_name,
-        dataset_name,
-    )
+        return self._insert_update("Table", fields)
 
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": mutation}
-    )
-    print(r.text)
-    return r.json()
+    def update_column(self, column: Column) -> dict:
+        fields = {
+            "id": column.id,
+            "bigqueryType": column.type.id,
+            "description": column.description,
+            "isPartition": column.is_partition,
+        }
+        return self._insert_update("Column", fields)
 
+    def update_cloud_table(self, cloud_table: CloudTable) -> dict:
+        fields = {
+            "id": cloud_table.id,
+            "table": cloud_table.table.id,
+            "gcpTableId": cloud_table.table_id,
+            "gcpDatasetId": cloud_table.dataset_id,
+            "gcpProjectId": cloud_table.project_id,
+        }
+        return self._insert_update("CloudTable", fields)
 
-def update_cloud_table(
-    url: str,
-    cloud_table_id: str,
-    table_catalog_id: str,
-    table_name: str,
-    dataset_name: str,
-    token: str,
-):
-    mutation = """
-        mutation {
-          CreateUpdateCloudTable(
-            input: {
-              id: "%s",
-              table: "%s",
-              gcpTableId: "%s",
-              gcpDatasetId: "%s",
-              gcpProjectId: "rj-smtr",
-            }
-          ) {
-            clientMutationId
-          }
-        }""" % (
-        cloud_table_id,
-        table_catalog_id,
-        table_name,
-        dataset_name,
-    )
+    def get_datasets(self) -> list[Dataset]:
+        fields = ["_id", "name", "description"]
+        elems = self._get("Dataset", fields)
+        datasets = []
+        for elem in elems:
+            datasets.append(Dataset.from_raw(elem["node"]))
+        return datasets
 
-    print(mutation)
-    r = requests.post(
-        url, headers={"Authorization": f"Bearer {token}"}, data={"query": mutation}
-    )
-    print(r.text)
-    return r.json()
+    def get_tables(self, dataset: Dataset) -> list[Table]:
+        fields = ["_id", "name", "description", "partitions"]
+        filter = {"field": "dataset_Id", "value": dataset.id}
+        elems = self._get("Table", fields, filter=filter)
+        tables = []
+        for elem in elems:
+            tables.append(Table.from_raw(elem["node"], dataset=dataset))
+        return tables
 
+    def get_columns(self, table: Table) -> list[Column]:
+        fields = [
+            "_id",
+            "name",
+            "description",
+            "isPartition",
+            "bigqueryType {_id, name}",
+        ]
+        filter = {"field": "table_Id", "value": table.id}
+        elems = self._get("Column", fields, filter=filter)
+        columns = []
+        for elem in elems:
+            columns.append(Column.from_raw(elem["node"], table=table))
+        return columns
 
-def sync_cloud_tables(url: str, datasets_catalog: dict, token: str) -> None:
+    def get_cloud_tables(self, table: Table) -> list[CloudTable]:
+        fields = ["_id", "gcpProjectId", "gcpDatasetId", "gcpTableId"]
+        filter = {"field": "table_Id", "value": table.id}
+        elems = self._get("Cloudtable", fields, filter=filter)
+        cloud_tables = []
+        for elem in elems:
+            cloud_tables.append(CloudTable.from_raw(elem["node"], table=table))
+        return cloud_tables
 
-    for dataset_id in datasets_catalog:
-        tables_catalog = get_tables_catalog(
-            url, datasets_catalog[dataset_id]["id"], token
-        )
-        for table_id in tables_catalog:
-            cloud_table = get_cloud_tables_catalog(
-                url, tables_catalog[table_id]["id"], token
-            )
-
-            if cloud_table:
-                update_cloud_table(
-                    url,
-                    cloud_table["_id"],
-                    tables_catalog[table_id]["id"],
-                    table_id,
-                    dataset_id,
-                    token,
-                )
-            else:
-                insert_cloud_table(
-                    url, tables_catalog[table_id]["_id"], table_id, dataset_id, token
-                )
-    print("Table sync complete")
+    def get_types(self):
+        fields = ["_id", "name"]
+        elems = self._get("Bigquerytype", fields)
+        types = []
+        for elem in elems:
+            types.append(Type.model_validate(elem["node"]))
+        return types
 
 
-def sync() -> None:
-    json_acct_info = json.loads(os.getenv("CREDENTIALS"), strict=False)
-    credentials = service_account.Credentials.from_service_account_info(json_acct_info)
-    client = bigquery.Client(credentials=credentials)
+class Synchronizer:
 
-    url = "https://api.catalogo-dados.mobilidade.rio/api/v1/graphql"
-    email = os.getenv("EMAIL")
-    password = os.getenv("PASSWORD")
-    token = auth(url, email, password)
+    def __init__(self):
+        self.catalog_api = CatalogAPI()
+        self.bigquery_api = BigQueryAPI()
 
-    datasets_catalog = get_datasets_catalog(url, token)
-    datasets_bq = get_datasets_bq(client)
+    def sync_datasets(self) -> None:
+        datasets_catalog = self.catalog_api.get_datasets()
+        datasets_bq = self.bigquery_api.get_datasets()
+        catalog_map = {dataset.name: dataset for dataset in datasets_catalog}
+        bq_map = {dataset.name: dataset for dataset in datasets_bq}
 
-    sync_datasets(client, url, datasets_catalog, datasets_bq, token)
-    datasets_catalog = get_datasets_catalog(url, token)
-    datasets_bq = get_datasets_bq(client)
+        obsolete = catalog_map.keys() - bq_map.keys()
+        new = bq_map.keys() - catalog_map.keys()
+        intersection = catalog_map.keys() & bq_map.keys()
 
-    sync_tables(client, url, datasets_catalog, token)
-    datasets_catalog = get_datasets_catalog(url, token)
+        for dataset_name in obsolete:
+            dataset = catalog_map[dataset_name]
+            self.catalog_api.delete_dataset(dataset)
 
-    sync_columns(client, url, datasets_catalog, token)
-    datasets_catalog = get_datasets_catalog(url, token)
+        for dataset_name in new:
+            dataset = bq_map[dataset_name]
+            self.catalog_api.insert_dataset(dataset)
 
-    sync_cloud_tables(url, datasets_catalog, token)
+        for dataset_name in intersection:
+            dataset_catalog = catalog_map[dataset_name]
+            dataset_bq = bq_map[dataset_name]
+            if dataset_catalog != dataset_bq:
+                dataset_bq.sync(dataset_catalog)
+                self.catalog_api.update_dataset(dataset_catalog)
+        print("Dataset sync complete")
+
+    def sync_tables(self) -> None:
+        datasets = self.catalog_api.get_datasets()
+        for dataset in datasets:
+            tables_catalog = self.catalog_api.get_tables(dataset)
+            tables_bq = self.bigquery_api.get_tables(dataset)
+            catalog_map = {table.name: table for table in tables_catalog}
+            bq_map = {table.name: table for table in tables_bq}
+
+            obsolete = catalog_map.keys() - bq_map.keys()
+            new = bq_map.keys() - catalog_map.keys()
+            intersection = catalog_map.keys() & bq_map.keys()
+
+            for table_name in obsolete:
+                table = catalog_map[table_name]
+                self.catalog_api.delete_table(table)
+
+            for table_name in new:
+                table = bq_map[table_name]
+                self.catalog_api.insert_table(table)
+
+            for table_name in intersection:
+                table_catalog = catalog_map[table_name]
+                table_bq = bq_map[table_name]
+                if table_catalog != table_bq:
+                    table_bq.sync(table_catalog)
+                    self.catalog_api.update_table(table_bq)
+
+        print("Table sync complete")
+
+    def sync_columns(self) -> None:
+        datasets = self.catalog_api.get_datasets()
+
+        for dataset in datasets:
+            tables = self.catalog_api.get_tables(dataset)
+
+            for table in tables:
+                columns_catalog = self.catalog_api.get_columns(table)
+                columns_bq = self.bigquery_api.get_columns(table)
+
+                catalog_map = {column.name: column for column in columns_catalog}
+                bq_map = {column.name: column for column in columns_bq}
+
+                obsolete = catalog_map.keys() - bq_map.keys()
+                new = bq_map.keys() - catalog_map.keys()
+                intersection = catalog_map.keys() & bq_map.keys()
+
+                for column_name in obsolete:
+                    column = catalog_map[column_name]
+                    self.catalog_api.delete_column(column)
+
+                for column_name in new:
+                    column = bq_map[column_name]
+                    self.catalog_api.insert_column(column)
+
+                for column_name in intersection:
+                    column_catalog = catalog_map[column_name]
+                    column_bq = bq_map[column_name]
+                    if column_catalog != column_bq:
+                        column_bq.sync(column_catalog)
+                        self.catalog_api.update_column(column_bq)
+
+        print("Column sync complete")
+
+    def sync_cloud_tables(self) -> None:
+        datasets = self.catalog_api.get_datasets()
+        for dataset in datasets:
+            tables = self.catalog_api.get_tables(dataset)
+            for table in tables:
+                cloud_tables = self.catalog_api.get_cloud_tables(table)
+                new_ct = CloudTable.from_raw(table=table)
+                if not cloud_tables:
+                    assert new_ct is not None
+                    self.catalog_api.insert_cloud_table(new_ct)
+                    continue
+                for ct in cloud_tables[:1]:
+                    if new_ct != ct:
+                        assert new_ct is not None
+                        new_ct.sync(ct)
+                        self.catalog_api.update_cloud_table(new_ct)
+
+                for ct in cloud_tables[1:]:
+                    self.catalog_api.delete_cloud_table(ct)
+
+        print("Cloud table sync complete")
+
+    def sync(self) -> None:
+        self.sync_datasets()
+        self.sync_tables()
+        self.sync_columns()
+        self.sync_cloud_tables()

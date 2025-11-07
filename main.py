@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from dateutil import parser
 from math import ceil
 from prefect.client import Client
-from catalog import sync
+from catalog import Synchronizer
 
 PAGE_SIZE = os.getenv("PAGE_SIZE")
 
@@ -504,7 +504,8 @@ def daily_report(now: datetime = None):
 
 @app.task
 def sync_catalog():
-    sync()
+    synchronizer = Synchronizer()
+    synchronizer.sync()
 
 
 if __name__ == "__main__":
@@ -514,7 +515,8 @@ if __name__ == "__main__":
     elif len(sys.argv) == 2 and sys.argv[1] == "report":
         daily_report()
     elif len(sys.argv) == 2 and sys.argv[1] == "catalog":
-        sync()
+        synchronizer = Synchronizer()
+        synchronizer.sync()
     else:
         print("No valid options, the valid commands are as follows:")
         print(

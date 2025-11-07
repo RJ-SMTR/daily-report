@@ -30,6 +30,11 @@ spec:
               secretKeyRef:
                 name: envs
                 key: PAGE_SIZE
+          - name: URL
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: URL
           - name: EMAIL
             valueFrom:
               secretKeyRef:
@@ -83,6 +88,11 @@ spec:
               secretKeyRef:
                 name: envs
                 key: PAGE_SIZE
+          - name: URL
+            valueFrom:
+              secretKeyRef:
+                name: envs
+                key: URL
           - name: EMAIL
             valueFrom:
               secretKeyRef:
