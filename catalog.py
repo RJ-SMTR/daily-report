@@ -233,7 +233,7 @@ class BigQueryAPI:
         dataset_list = []
         for dataset in datasets:
             dataset_id: str = dataset.dataset_id
-            if dataset_id not in ["bilhetagem", "gtfs"]:
+            if dataset_id not in ["bilhetagem"]:
                 continue
             if exclude_staging and dataset_id.endswith("_staging"):
                 continue
